@@ -2,7 +2,7 @@
 """
 rss_search_mcp.py  (mcp-rss-python edition)
 ─────────────────────────────────────────────────────────────────────────────
-Search 33 free RSS news feeds for a specific topic by connecting to the
+Search free RSS news feeds for a specific topic by connecting to the
 mcp-rss-python MCP server over stdio.  Results are deduplicated, ranked,
 and rendered as Rich-formatted JSON to stdout.
 
@@ -77,8 +77,10 @@ def _q(query: str) -> str:
 
 def search_feed_metas(query: str) -> list[dict]:
     """
-    Three aggregator feeds that embed the query in their URL.
+    Aggregator feeds that embed the query in their URL.
     The provider pre-filters results, so every returned item is relevant.
+
+    Note: Yahoo News RSS was removed — it returns malformed XML.
     """
     return [
         {
@@ -93,22 +95,22 @@ def search_feed_metas(query: str) -> list[dict]:
             "category": "Aggregator",
             "region": "Global",
         },
-        {
-            "name": "Yahoo News",
-            "url": f"https://news.search.yahoo.com/news/rss?p={_q(query)}",
-            "category": "Aggregator",
-            "region": "Global",
-        },
     ]
 
 
-# 30 general feeds — fetched in full, filtered server-side by search_feed_items
+# General feeds — fetched in full, filtered server-side by search_feed_items
+#
+# Removed feeds (broken as of 2026-03):
+#   Reuters – World / Politics     : DNS failure (Reuters discontinued public RSS)
+#   AP via rsshub.app (x2)         : HTTP 403 (rsshub.app blocks automated access)
+#   VOA News                       : XML parse error (malformed feed)
+#   Politico                       : HTTP 403 (blocks automated access)
+#   CFR (Council on Foreign Rel.)  : HTTP 404 (feed URL no longer exists)
+#   The Defense Post               : XML parse error (malformed feed)
+#   Mercopress                     : HTTP 404 (feed URL no longer exists)
+#   Dialogo Americas               : XML parse error (URL redirects to an image)
+#   LAHT                           : HTTP 404 (feed URL no longer exists)
 GENERAL_FEEDS: list[dict] = [
-    # Wire services
-    {"url": "https://feeds.reuters.com/reuters/worldNews",                      "name": "Reuters – World",              "category": "Wire Service", "region": "Global"},
-    {"url": "https://feeds.reuters.com/Reuters/PoliticsNews",                   "name": "Reuters – Politics",           "category": "Wire Service", "region": "Global"},
-    {"url": "https://rsshub.app/apnews/topics/ap-top-news",                     "name": "AP – Top Headlines",           "category": "Wire Service", "region": "Global"},
-    {"url": "https://rsshub.app/apnews/topics/international-news",              "name": "AP – International",           "category": "Wire Service", "region": "Global"},
     # Broadcasters
     {"url": "http://feeds.bbci.co.uk/news/world/rss.xml",                       "name": "BBC – World",                  "category": "Broadcaster",  "region": "Global"},
     {"url": "http://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",         "name": "BBC – Americas",               "category": "Broadcaster",  "region": "Americas"},
@@ -116,7 +118,6 @@ GENERAL_FEEDS: list[dict] = [
     {"url": "https://rss.dw.com/rdf/rss-en-all",                               "name": "Deutsche Welle",               "category": "Broadcaster",  "region": "Global"},
     {"url": "https://www.france24.com/en/americas/rss",                         "name": "France 24 – Americas",         "category": "Broadcaster",  "region": "Americas"},
     {"url": "https://www.rfi.fr/en/rss",                                        "name": "RFI English",                  "category": "Broadcaster",  "region": "Global"},
-    {"url": "https://feeds.voanews.com/voaspecialenglish/latestnews",           "name": "VOA News",                     "category": "Broadcaster",  "region": "Global"},
     # US media
     {"url": "https://feeds.npr.org/1001/rss.xml",                               "name": "NPR – News",                   "category": "US Media",     "region": "US"},
     {"url": "https://feeds.npr.org/1004/rss.xml",                               "name": "NPR – World",                  "category": "US Media",     "region": "Global"},
@@ -124,23 +125,17 @@ GENERAL_FEEDS: list[dict] = [
     {"url": "https://www.cbsnews.com/latest/rss/world",                         "name": "CBS News – World",             "category": "US Media",     "region": "Global"},
     {"url": "https://moxie.foxnews.com/google-publisher/world.xml",             "name": "Fox News – World",             "category": "US Media",     "region": "Global"},
     {"url": "https://thehill.com/feed/",                                        "name": "The Hill",                     "category": "US Media",     "region": "US"},
-    {"url": "https://www.politico.com/rss/politics08.xml",                      "name": "Politico",                     "category": "US Media",     "region": "US"},
     {"url": "https://www.theguardian.com/world/rss",                            "name": "The Guardian – World",         "category": "Int'l Print",  "region": "Global"},
     {"url": "https://www.theguardian.com/world/americas/rss",                   "name": "The Guardian – Americas",      "category": "Int'l Print",  "region": "Americas"},
     {"url": "https://time.com/feed/",                                           "name": "Time Magazine",                "category": "Int'l Print",  "region": "Global"},
     # Think tanks / foreign policy
     {"url": "https://foreignpolicy.com/feed/",                                  "name": "Foreign Policy",               "category": "Think Tank",   "region": "Global"},
-    {"url": "https://www.cfr.org/rss.xml",                                      "name": "Council on Foreign Relations", "category": "Think Tank",   "region": "Global"},
     {"url": "https://www.justsecurity.org/feed/",                               "name": "Just Security",                "category": "Think Tank",   "region": "Global"},
     # Defense / security
     {"url": "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml","name": "Defense News",                 "category": "Defense",      "region": "Global"},
     {"url": "https://breakingdefense.com/feed/",                                "name": "Breaking Defense",             "category": "Defense",      "region": "Global"},
-    {"url": "https://www.thedefensepost.com/feed/",                             "name": "The Defense Post",             "category": "Defense",      "region": "Global"},
     # Latin America specialists
-    {"url": "https://en.mercopress.com/rss.xml",                                "name": "Mercopress",                   "category": "Regional",     "region": "Americas"},
-    {"url": "https://dialogo-americas.com/en/feed/",                            "name": "Dialogo Americas",             "category": "Regional",     "region": "Americas"},
     {"url": "https://insightcrime.org/feed/",                                   "name": "InSight Crime",                "category": "Regional",     "region": "Americas"},
-    {"url": "https://laht.com/feed/",                                           "name": "Latin American Herald Tribune","category": "Regional",     "region": "Americas"},
 ]
 
 # URL → metadata lookup for annotating search_feed_items results
