@@ -546,7 +546,7 @@ async def _main() -> None:
     feed_cache.start()
     logger.info("MCP-RSS server starting...")
     try:
-        await mcp.run_async()
+        await mcp.run_stdio_async()
     finally:
         feed_cache.destroy()
         logger.info("MCP-RSS server shut down.")
