@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-rss_topic_search.py  (mcp-rss-python edition)
+rss_search_mcp.py  (mcp-rss-python edition)
 ─────────────────────────────────────────────────────────────────────────────
 Search 33 free RSS news feeds for a specific topic by connecting to the
 mcp-rss-python MCP server over stdio.  Results are deduplicated, ranked,
@@ -17,9 +17,9 @@ Both tool calls run concurrently; results are merged before deduplication.
 
 Usage
 ─────
-    python rss_topic_search.py                              # built-in query
-    python rss_topic_search.py "my search term"             # custom query
-    python rss_topic_search.py "term" --save results.json   # also save file
+    python rss_search_mcp.py                              # built-in query
+    python rss_search_mcp.py "my search term"             # custom query
+    python rss_search_mcp.py "term" --save results.json   # also save file
 
 Requirements
 ────────────
