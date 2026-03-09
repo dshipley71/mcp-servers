@@ -33,7 +33,9 @@ Requirements
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -271,7 +273,24 @@ async def _run_search(query: str) -> tuple[list[dict], dict]:
 
     sf_metas = search_feed_metas(query)
 
-    async with stdio_client(server_params) as (read, write):
+    # stdio_client forwards errlog to anyio.open_process(stderr=errlog), which
+    # calls errlog.fileno() to obtain a real OS file descriptor for the child
+    # process.  In Jupyter / Colab, sys.stderr is an ipykernel OutStream that
+    # wraps the real stream but exposes no file descriptor, so fileno() raises
+    # io.UnsupportedOperation.  Fall back to /dev/null when that happens.
+    try:
+        sys.stderr.fileno()
+        _errlog = sys.stderr
+    except io.UnsupportedOperation:
+        _errlog = open(os.devnull, "w")
+
+    try:
+        _ctx = stdio_client(server_params, errlog=_errlog)
+    except TypeError:
+        # Older MCP versions don't accept errlog; fall back to default behaviour.
+        _ctx = stdio_client(server_params)
+
+    async with _ctx as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 
@@ -319,6 +338,9 @@ async def _run_search(query: str) -> tuple[list[dict], dict]:
                     },
                 )
                 progress.advance(task)
+
+    if _errlog is not sys.stderr:
+        _errlog.close()
 
     # ── Merge ─────────────────────────────────────────────────────────────
     multi_data  = _parse_tool_json(multi_raw)
