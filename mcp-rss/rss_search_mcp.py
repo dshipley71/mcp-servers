@@ -23,8 +23,11 @@ Usage
 
 Requirements
 ────────────
-    pip install mcp httpx feedparser beautifulsoup4 bleach
-                rich python-dateutil pydantic-settings
+    pip install mcp httpx feedparser beautifulsoup4 bleach \
+                rich python-dateutil pydantic-settings trafilatura
+
+    trafilatura is optional but strongly recommended — it greatly improves
+    article body extraction compared to the built-in BeautifulSoup fallback.
 
     The mcp-rss-python directory must exist at  MCP_SERVER_DIR  (see below).
 ─────────────────────────────────────────────────────────────────────────────
@@ -46,6 +49,11 @@ from urllib.parse import quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
+try:
+    import trafilatura as _trafilatura  # optional; much better article extraction
+    _HAS_TRAFILATURA = True
+except ImportError:
+    _HAS_TRAFILATURA = False
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from rich import print_json
@@ -195,6 +203,21 @@ def _item_to_article(item: dict, meta: dict, matched_fields: list[str], feed_url
     url   = item.get("url") or ""
     if not title or not url:
         return None
+
+    desc    = _clean(item.get("description") or "", 500)
+    content = _clean(item.get("content") or "", 2000)
+
+    # RSS aggregators (e.g. Google News) often put just the title in <description>.
+    # When that happens, leave summary blank so it is filled later by enrichment
+    # rather than showing the same text in three different fields.
+    title_norm = re.sub(r"\s+", " ", title.lower()).strip()
+    desc_norm  = re.sub(r"\s+", " ", desc.lower()).strip()
+    summary = "" if (desc_norm and desc_norm == title_norm) else desc
+
+    # content falls back to description only when a real <content:encoded> is absent
+    if not content:
+        content = desc
+
     return {
         "title":            title,
         "url":              url,
@@ -204,8 +227,8 @@ def _item_to_article(item: dict, meta: dict, matched_fields: list[str], feed_url
         "published_iso":    _epoch_ms_to_iso(item.get("published")),
         "published_epoch":  _epoch_ms_to_s(item.get("published")),
         "author":           item.get("author"),
-        "summary":          _clean(item.get("description") or item.get("content") or "", 500),
-        "content":          _clean(item.get("content") or item.get("description") or "", 2000),
+        "summary":          summary,
+        "content":          content,
         "tags":             item.get("categories") or [],
         "matched_fields":   matched_fields,
         "feed_url":         feed_url,
@@ -263,51 +286,52 @@ def _deduplicate(articles: list[dict]) -> list[dict]:
 # Article content extraction
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Selectors tried in order; first one that yields ≥100 chars wins.
+# Selectors tried in order; first one that yields ≥200 chars wins.
 _CONTENT_SELECTORS = [
+    '[itemprop="articleBody"]',
     "article",
     "main",
-    '[itemprop="articleBody"]',
     ".article-body",
     ".article__body",
     ".article-content",
+    ".article__content",
     ".post-content",
+    ".post__content",
     ".entry-content",
     ".story-body",
     ".story__body",
     ".body-text",
     ".content-body",
+    ".page-content",
+    '[role="main"]',
 ]
 
-_ARTICLE_FETCH_TIMEOUT = 10  # seconds
-_ARTICLE_MIN_CHARS     = 100  # ignore fragments shorter than this
+_ARTICLE_FETCH_TIMEOUT = 15  # seconds
+_ARTICLE_MIN_CHARS     = 200  # ignore fragments shorter than this
+
+# Browser-like headers that reduce the chance of being blocked
+_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT":             "1",
+}
 
 
-async def _fetch_article_content(url: str) -> Optional[str]:
-    """
-    Download the article page and extract the main body text.
-    Returns None on any error or if no meaningful text is found.
-    """
-    try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=_ARTICLE_FETCH_TIMEOUT,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; MCP-RSS/1.0)"},
-        ) as client:
-            resp = await client.get(url)
-            if resp.status_code >= 400:
-                return None
-            html = resp.text
-    except Exception:
-        return None
-
+def _bs4_extract(html: str) -> Optional[str]:
+    """BeautifulSoup fallback extractor."""
     try:
         soup = BeautifulSoup(html, "html.parser")
 
         # Remove boilerplate noise
         for tag in soup(["script", "style", "nav", "header", "footer",
                           "aside", "figure", "figcaption", "noscript",
-                          "form", "button", "iframe", "svg"]):
+                          "form", "button", "iframe", "svg", "template"]):
             tag.decompose()
 
         # Try semantic selectors first
@@ -318,16 +342,56 @@ async def _fetch_article_content(url: str) -> Optional[str]:
                 if len(text) >= _ARTICLE_MIN_CHARS:
                     return text
 
-        # Fallback: aggregate all <p> tags
+        # Fallback: aggregate substantial <p> tags
         paras = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
-        text  = " ".join(p for p in paras if len(p) > 40)
+        text  = " ".join(p for p in paras if len(p) > 60)
         if len(text) >= _ARTICLE_MIN_CHARS:
             return text
-
     except Exception:
         pass
-
     return None
+
+
+async def _fetch_article_content(url: str) -> Optional[str]:
+    """
+    Download the article page and extract the main body text.
+    Uses trafilatura (if installed) for best results, falls back to BeautifulSoup.
+    Returns None on any error or if no meaningful text is found.
+    """
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=_ARTICLE_FETCH_TIMEOUT,
+            headers=_FETCH_HEADERS,
+        ) as client:
+            resp = await client.get(url)
+            if resp.status_code >= 400:
+                return None
+            html = resp.text
+    except Exception:
+        return None
+
+    if not html:
+        return None
+
+    # trafilatura is specifically designed for news article extraction and
+    # handles paywalls, ads, and navigation far better than raw CSS selectors.
+    if _HAS_TRAFILATURA:
+        try:
+            text = _trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=False,
+                no_fallback=False,
+                favor_recall=True,
+            )
+            if text and len(text) >= _ARTICLE_MIN_CHARS:
+                return text
+        except Exception:
+            pass
+
+    # BeautifulSoup fallback
+    return _bs4_extract(html)
 
 
 async def _enrich_articles(
@@ -342,9 +406,12 @@ async def _enrich_articles(
     sem = asyncio.Semaphore(max_concurrent)
 
     async def _enrich_one(art: dict) -> dict:
-        # Only enrich when content is identical to summary or missing
-        if art.get("content") and art["content"] != art.get("summary"):
-            return art
+        # Enrich when content is missing, identical to summary, or summary is
+        # blank (which happens when the RSS description equalled the title).
+        content = art.get("content") or ""
+        summary = art.get("summary") or ""
+        if content and content != summary and summary:
+            return art  # already have distinct content
         url = art.get("url")
         if not url:
             return art
