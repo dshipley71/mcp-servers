@@ -44,6 +44,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote_plus
 
+import httpx
+from bs4 import BeautifulSoup
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from rich import print_json
@@ -258,6 +260,104 @@ def _deduplicate(articles: list[dict]) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Article content extraction
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Selectors tried in order; first one that yields ≥100 chars wins.
+_CONTENT_SELECTORS = [
+    "article",
+    "main",
+    '[itemprop="articleBody"]',
+    ".article-body",
+    ".article__body",
+    ".article-content",
+    ".post-content",
+    ".entry-content",
+    ".story-body",
+    ".story__body",
+    ".body-text",
+    ".content-body",
+]
+
+_ARTICLE_FETCH_TIMEOUT = 10  # seconds
+_ARTICLE_MIN_CHARS     = 100  # ignore fragments shorter than this
+
+
+async def _fetch_article_content(url: str) -> Optional[str]:
+    """
+    Download the article page and extract the main body text.
+    Returns None on any error or if no meaningful text is found.
+    """
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=_ARTICLE_FETCH_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MCP-RSS/1.0)"},
+        ) as client:
+            resp = await client.get(url)
+            if resp.status_code >= 400:
+                return None
+            html = resp.text
+    except Exception:
+        return None
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Remove boilerplate noise
+        for tag in soup(["script", "style", "nav", "header", "footer",
+                          "aside", "figure", "figcaption", "noscript",
+                          "form", "button", "iframe", "svg"]):
+            tag.decompose()
+
+        # Try semantic selectors first
+        for selector in _CONTENT_SELECTORS:
+            node = soup.select_one(selector)
+            if node:
+                text = " ".join(node.get_text(" ", strip=True).split())
+                if len(text) >= _ARTICLE_MIN_CHARS:
+                    return text
+
+        # Fallback: aggregate all <p> tags
+        paras = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
+        text  = " ".join(p for p in paras if len(p) > 40)
+        if len(text) >= _ARTICLE_MIN_CHARS:
+            return text
+
+    except Exception:
+        pass
+
+    return None
+
+
+async def _enrich_articles(
+    articles: list[dict],
+    max_concurrent: int = 5,
+) -> list[dict]:
+    """
+    For each article where content == summary (i.e. no full-text from the feed),
+    fetch the article page and replace content with the extracted body text.
+    Runs up to max_concurrent fetches in parallel.
+    """
+    sem = asyncio.Semaphore(max_concurrent)
+
+    async def _enrich_one(art: dict) -> dict:
+        # Only enrich when content is identical to summary or missing
+        if art.get("content") and art["content"] != art.get("summary"):
+            return art
+        url = art.get("url")
+        if not url:
+            return art
+        async with sem:
+            extracted = await _fetch_article_content(url)
+        if extracted:
+            art = {**art, "content": _clean(extracted, 3000)}
+        return art
+
+    return list(await asyncio.gather(*[_enrich_one(a) for a in articles]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Core async search
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -436,6 +536,10 @@ async def main(query: str, save_path: Optional[Path] = None) -> None:
 
     deduped = _deduplicate(raw_articles)
     final   = deduped[:MAX_ARTICLES]
+
+    # Enrich articles that have no full-text content from the feed
+    console.print("[dim]Fetching article content…[/]")
+    final = await _enrich_articles(final)
 
     # Stats bar
     console.print()
