@@ -94,7 +94,13 @@ class GDELTClient:
             return GDELTAPIResponse()
 
         except httpx.HTTPStatusError as exc:
-            msg = f"GDELT API HTTP error {exc.response.status_code}: {exc.response.text[:200]}"
+            status = exc.response.status_code
+            if status == 429:
+                retry_after = exc.response.headers.get("Retry-After", "")
+                hint = f" — Retry-After: {retry_after}s" if retry_after else ""
+                msg = f"GDELT API rate limit (429){hint}"
+            else:
+                msg = f"GDELT API HTTP error {status}: {exc.response.text[:200]}"
             logger.error(msg)
             raise RuntimeError(msg) from exc
 
