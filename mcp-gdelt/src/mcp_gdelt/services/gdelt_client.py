@@ -22,6 +22,7 @@ class GDELTClient:
         self._client = httpx.AsyncClient(
             timeout=config.gdelt_api_timeout,
             headers={"User-Agent": config.gdelt_user_agent},
+            follow_redirects=True,   # GDELT redirects; httpx default is False
         )
         logger.debug(
             "GDELTClient initialised",
@@ -99,6 +100,15 @@ class GDELTClient:
 
         except httpx.RequestError as exc:
             msg = f"GDELT API request failed: {exc}"
+            logger.error(msg)
+            raise RuntimeError(msg) from exc
+
+        except ValueError as exc:
+            # json.JSONDecodeError (subclass of ValueError) is raised when
+            # the response body is empty or not valid JSON — e.g. when httpx
+            # receives a redirect without follow_redirects=True, or when GDELT
+            # returns a null/empty body for a no-results query.
+            msg = f"GDELT API response is not valid JSON: {exc}"
             logger.error(msg)
             raise RuntimeError(msg) from exc
 
