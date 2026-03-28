@@ -11,10 +11,21 @@ load_dotenv()
 
 LogLevel = Literal["debug", "info", "warn", "error"]
 
+# Rate-limit intervals differ between anonymous and authenticated access.
+# Anonymous (no key): GDELT enforces ~1 request per 5 seconds.
+# Authenticated (API key): higher throughput; 1 second is a safe default.
+_ANON_RATE_LIMIT = 6.0   # seconds — buffer above the stated 5 s limit
+_AUTH_RATE_LIMIT = 1.0   # seconds — conservative default for keyed access
+
 
 @dataclass
 class Config:
-    gdelt_api_timeout: float = field(default_factory=lambda: float(os.getenv("GDELT_API_TIMEOUT", "60")))
+    gdelt_api_key: str = field(
+        default_factory=lambda: os.getenv("GDELT_API_KEY", "")
+    )
+    gdelt_api_timeout: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_API_TIMEOUT", "60"))
+    )
     gdelt_api_base_url: str = field(
         default_factory=lambda: os.getenv(
             "GDELT_API_BASE_URL", "https://api.gdeltproject.org/api/v2/doc/doc"
@@ -33,7 +44,12 @@ class Config:
         )
     )
     gdelt_rate_limit_interval: float = field(
-        default_factory=lambda: float(os.getenv("GDELT_RATE_LIMIT_INTERVAL", "6.0"))
+        default_factory=lambda: float(
+            os.getenv(
+                "GDELT_RATE_LIMIT_INTERVAL",
+                str(_AUTH_RATE_LIMIT if os.getenv("GDELT_API_KEY") else _ANON_RATE_LIMIT),
+            )
+        )
     )
     gdelt_max_retries: int = field(
         default_factory=lambda: int(os.getenv("GDELT_MAX_RETRIES", "4"))
