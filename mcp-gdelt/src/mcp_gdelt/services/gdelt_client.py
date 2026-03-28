@@ -108,6 +108,9 @@ class GDELTClient:
             # the response body is empty or not valid JSON — e.g. when httpx
             # receives a redirect without follow_redirects=True, or when GDELT
             # returns a null/empty body for a no-results query.
+            if not response.content.strip():
+                logger.debug("GDELT API returned empty body — treating as no results")
+                return GDELTAPIResponse()
             msg = f"GDELT API response is not valid JSON: {exc}"
             logger.error(msg)
             raise RuntimeError(msg) from exc
