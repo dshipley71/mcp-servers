@@ -117,6 +117,8 @@ class GDELTClient:
 
     async def _execute_query(self, params: GDELTQueryParams) -> GDELTAPIResponse:
         request_params = params.to_request_params()
+        if config.gdelt_api_key:
+            request_params["key"] = config.gdelt_api_key
         logger.debug("GDELT API request", {"url": self._base_url, "params": request_params})
 
         try:
