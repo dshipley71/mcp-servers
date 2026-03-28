@@ -27,7 +27,10 @@ class Config:
         default_factory=lambda: os.getenv("GDELT_DEFAULT_TIMESPAN", "1month")
     )
     gdelt_user_agent: str = field(
-        default_factory=lambda: os.getenv("GDELT_USER_AGENT", "GDELT-MCP-Server/1.0")
+        default_factory=lambda: os.getenv(
+            "GDELT_USER_AGENT",
+            "Mozilla/5.0 (compatible; mcp-gdelt/1.0; +https://github.com/dshipley71/mcp-servers)",
+        )
     )
     gdelt_rate_limit_interval: float = field(
         default_factory=lambda: float(os.getenv("GDELT_RATE_LIMIT_INTERVAL", "6.0"))
