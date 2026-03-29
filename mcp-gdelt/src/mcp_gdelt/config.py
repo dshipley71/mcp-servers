@@ -31,6 +31,9 @@ class Config:
             "GDELT_API_BASE_URL", "https://api.gdeltproject.org/api/v2/doc/doc"
         )
     )
+    gdelt_cloud_base_url: str = field(
+        default_factory=lambda: os.getenv("GDELT_CLOUD_BASE_URL", "https://gdeltcloud.com")
+    )
     gdelt_default_max_records: int = field(
         default_factory=lambda: int(os.getenv("GDELT_DEFAULT_MAX_RECORDS", "50"))
     )
