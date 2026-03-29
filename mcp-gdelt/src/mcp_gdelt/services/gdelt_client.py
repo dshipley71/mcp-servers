@@ -172,8 +172,12 @@ class GDELTClient:
     async def _cached_execute(self, params: GDELTQueryParams) -> GDELTAPIResponse:
         """Return a cached result when available, otherwise hit the API."""
         request_params = params.to_request_params()
+        # Bearer token is sent as a header; exclude it from the cache key so
+        # the key reflects query intent only (same query == same cached result
+        # regardless of which credential is active).
+        auth_headers: dict[str, str] = {}
         if config.gdelt_api_key:
-            request_params["key"] = config.gdelt_api_key
+            auth_headers["Authorization"] = f"Bearer {config.gdelt_api_key}"
 
         if config.gdelt_cache_ttl > 0:
             key = self._cache_key(request_params)
@@ -182,7 +186,7 @@ class GDELTClient:
                 logger.debug("Cache hit", {"key": key})
                 return cached
 
-        result = await self._rate_limited_execute(params, request_params)
+        result = await self._rate_limited_execute(params, request_params, auth_headers)
 
         if config.gdelt_cache_ttl > 0:
             self._cache_set(key, result)  # type: ignore[possibly-undefined]
@@ -190,24 +194,32 @@ class GDELTClient:
         return result
 
     async def _rate_limited_execute(
-        self, params: GDELTQueryParams, request_params: dict[str, str]
+        self,
+        params: GDELTQueryParams,
+        request_params: dict[str, str],
+        auth_headers: dict[str, str],
     ) -> GDELTAPIResponse:
         """Enforce the per-request rate limit, then execute the query."""
         loop = asyncio.get_event_loop()
         elapsed = loop.time() - self._last_request_time
         if elapsed < config.gdelt_rate_limit_interval:
             await asyncio.sleep(config.gdelt_rate_limit_interval - elapsed)
-        result = await self._execute_query(params, request_params)
+        result = await self._execute_query(params, request_params, auth_headers)
         self._last_request_time = loop.time()  # advance only after a completed call
         return result
 
     async def _execute_query(
-        self, params: GDELTQueryParams, request_params: dict[str, str]
+        self,
+        params: GDELTQueryParams,
+        request_params: dict[str, str],
+        auth_headers: dict[str, str],
     ) -> GDELTAPIResponse:
         logger.debug("GDELT API request", {"url": self._base_url, "params": request_params})
 
         try:
-            response = await self._client.get(self._base_url, params=request_params)
+            response = await self._client.get(
+                self._base_url, params=request_params, headers=auth_headers
+            )
             response.raise_for_status()
 
             if params.format == "JSON":
