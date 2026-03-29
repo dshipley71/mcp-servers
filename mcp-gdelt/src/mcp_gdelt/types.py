@@ -111,6 +111,14 @@ class SearchArticlesInput(BaseModel):
         None,
         description="End date in YYYYMMDDHHMMSS format.",
     )
+    deduplicate: bool = Field(
+        True,
+        description=(
+            "Remove duplicate articles (same URL) from results. "
+            "GDELT returns ~20 %% duplicates from wire-service syndication. "
+            "Default: True."
+        ),
+    )
 
 
 class SearchImagesInput(BaseModel):

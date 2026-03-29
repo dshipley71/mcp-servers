@@ -45,6 +45,11 @@ class Config:
     gdelt_max_connections: int = field(
         default_factory=lambda: int(os.getenv("GDELT_MAX_CONNECTIONS", "100"))
     )
+    # Idle connections older than this (seconds) are closed before reuse,
+    # preventing stale-socket ConnectTimeout after long inter-request gaps.
+    gdelt_keepalive_expiry: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_KEEPALIVE_EXPIRY", "20.0"))
+    )
     gdelt_api_base_url: str = field(
         default_factory=lambda: os.getenv(
             "GDELT_API_BASE_URL", "https://api.gdeltproject.org/api/v2/doc/doc"

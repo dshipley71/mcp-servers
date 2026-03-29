@@ -45,7 +45,60 @@ class GDELTAccessDeniedError(RuntimeError):
 
 
 class GDELTRateLimitError(RuntimeError):
-    """Transient rate limit (429 RATE_LIMITED). Not retried — caller should back off."""
+    """Transient rate limit (429 RATE_LIMITED). Not retried — caller should back off.
+
+    Attributes:
+        retry_after: Seconds to wait before retrying, parsed from the Retry-After
+                     response header. None if the header was absent.
+    """
+
+    def __init__(self, message: str, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        if self.retry_after is not None:
+            return f"{base} (retry after {self.retry_after}s)"
+        return base
+
+
+class GDELTClientError(RuntimeError):
+    """Non-retryable client error (4xx other than 401 / 403 / 429).
+
+    Indicates a problem with the request itself (bad parameters, not found, etc.).
+    Retrying the same request will not help.
+    """
+
+
+class GDELTServerError(RuntimeError):
+    """Retryable server-side error (5xx).
+
+    Indicates a transient backend failure. The retry loop will back off and
+    re-attempt the request automatically.
+    """
+
+
+class GDELTParseError(RuntimeError):
+    """Response body could not be parsed as the expected format.
+
+    Attributes:
+        raw_data: First 500 characters of the response body, for debugging.
+                  None if the body was empty or unavailable.
+    """
+
+    def __init__(self, message: str, raw_data: str | None = None) -> None:
+        super().__init__(message)
+        self.raw_data = raw_data
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        if self.raw_data:
+            snippet = self.raw_data[:100]
+            if len(self.raw_data) > 100:
+                snippet += "..."
+            return f"{base} (raw: {snippet!r})"
+        return base
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +143,7 @@ class GDELTClient:
             limits=httpx.Limits(
                 max_keepalive_connections=config.gdelt_max_keepalive_connections,
                 max_connections=config.gdelt_max_connections,
+                keepalive_expiry=config.gdelt_keepalive_expiry,
             ),
             headers={"User-Agent": config.gdelt_user_agent},
             follow_redirects=True,
@@ -138,6 +192,20 @@ class GDELTClient:
                 lambda: self._execute_doc_query(params, request_params, auth_headers),
             )
         )
+        articles = result.articles or []
+        if inp.deduplicate and articles:
+            seen: set[str] = set()
+            unique = []
+            for a in articles:
+                key = a.url or ""
+                if not key or key not in seen:
+                    seen.add(key)
+                    unique.append(a)
+            if len(unique) < len(articles):
+                logger.debug(
+                    f"Deduplication removed {len(articles) - len(unique)} duplicate articles"
+                )
+            result = result.model_copy(update={"articles": unique})
         logger.info(f"Found {len(result.articles or [])} articles for: {inp.query}")
         return result
 
@@ -231,8 +299,9 @@ class GDELTClient:
         for attempt in range(config.gdelt_max_retries):
             try:
                 return await fn()
-            except (GDELTQuotaExceededError, GDELTAuthError, GDELTAccessDeniedError, GDELTRateLimitError):
-                raise   # not retryable
+            except (GDELTQuotaExceededError, GDELTAuthError, GDELTAccessDeniedError,
+                    GDELTRateLimitError, GDELTClientError):
+                raise   # not retryable — problem is with the request, not the server
             except RuntimeError as exc:
                 last_exc = exc
                 if attempt >= config.gdelt_max_retries - 1:
@@ -379,16 +448,18 @@ class GDELTClient:
             pass
 
         if status == 429:
-            retry_after = exc.response.headers.get("Retry-After", "")
+            retry_after_hdr = exc.response.headers.get("Retry-After", "")
+            retry_after_val: int | None = (
+                int(retry_after_hdr) if retry_after_hdr.isdigit() else None
+            )
             if error_code == "QUOTA_EXCEEDED":
                 msg = "GDELT API monthly quota exceeded (429 QUOTA_EXCEEDED)"
                 logger.error(msg)
                 raise GDELTQuotaExceededError(msg) from exc
-            hint     = f" — wait {retry_after}s before retrying" if retry_after else ""
             code_tag = f" [{error_code}]" if error_code else ""
-            msg = f"GDELT API rate limit (429{code_tag}){hint}"
+            msg = f"GDELT API rate limit (429{code_tag})"
             logger.error(msg)
-            raise GDELTRateLimitError(msg) from exc
+            raise GDELTRateLimitError(msg, retry_after=retry_after_val) from exc
 
         if status == 401:
             msg = f"GDELT API authentication failed (401 {error_code or 'UNAUTHORIZED'})"
@@ -400,9 +471,14 @@ class GDELTClient:
             logger.error(msg)
             raise GDELTAccessDeniedError(msg) from exc
 
-        msg = f"GDELT API HTTP error {status}: {exc.response.text[:200]}"
+        if 500 <= status < 600:
+            msg = f"GDELT API server error {status}: {exc.response.text[:200]}"
+            logger.error(msg)
+            raise GDELTServerError(msg) from exc
+
+        msg = f"GDELT API client error {status}: {exc.response.text[:200]}"
         logger.error(msg)
-        raise RuntimeError(msg) from exc
+        raise GDELTClientError(msg) from exc
 
     # ------------------------------------------------------------------
     # Low-level HTTP execution — DOC 2.0 API
@@ -441,9 +517,10 @@ class GDELTClient:
             if not response.text.strip():
                 logger.debug("GDELT DOC returned empty body — treating as no results")
                 return GDELTAPIResponse()
+            raw = response.text[:500]
             msg = f"GDELT DOC response is not valid JSON: {exc}"
             logger.error(msg)
-            raise RuntimeError(msg) from exc
+            raise GDELTParseError(msg, raw_data=raw) from exc
 
     # ------------------------------------------------------------------
     # Low-level HTTP execution — GDELT Cloud API
@@ -477,9 +554,16 @@ class GDELTClient:
             if not response.text.strip():
                 logger.debug("GDELT Cloud returned empty body — treating as no results")
                 return GDELTMediaEventsResponse()
+            raw = response.text[:500]
             msg = f"GDELT Cloud response is not valid JSON: {exc}"
             logger.error(msg)
-            raise RuntimeError(msg) from exc
+            raise GDELTParseError(msg, raw_data=raw) from exc
+
+    async def __aenter__(self) -> GDELTClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.aclose()
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
