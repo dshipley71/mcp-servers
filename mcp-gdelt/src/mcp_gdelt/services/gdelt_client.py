@@ -21,6 +21,14 @@ from ..types import (
 )
 
 
+class GDELTQuotaExceededError(RuntimeError):
+    """Raised when the monthly API quota is exhausted (HTTP 429 QUOTA_EXCEEDED).
+
+    Unlike a transient rate-limit, a quota exhaustion cannot be resolved by
+    waiting — retrying would waste the last remaining headroom on other calls.
+    """
+
+
 @dataclass
 class _CacheEntry:
     response: GDELTAPIResponse
@@ -109,11 +117,17 @@ class GDELTClient:
     # ------------------------------------------------------------------
 
     async def _with_retry(self, params: GDELTQueryParams) -> GDELTAPIResponse:
-        """Execute a query with exponential back-off retry."""
+        """Execute a query with exponential back-off retry.
+
+        GDELTQuotaExceededError (monthly quota) is re-raised immediately
+        without retrying — the quota cannot be restored by waiting.
+        """
         last_exc: RuntimeError | None = None
         for attempt in range(config.gdelt_max_retries):
             try:
                 return await self._cached_execute(params)
+            except GDELTQuotaExceededError:
+                raise  # monthly quota — retrying won't help
             except RuntimeError as exc:
                 last_exc = exc
                 if attempt >= config.gdelt_max_retries - 1:
@@ -129,16 +143,15 @@ class GDELTClient:
     def _retry_wait(self, exc: RuntimeError, attempt: int) -> float:
         """Return seconds to wait before the next attempt.
 
-        429 / rate-limit errors use their own exponential schedule so that
-        repeated quota exhaustion doesn't keep hitting GDELT at the same
-        (too-short) interval.  Other errors use the standard base_wait.
+        RATE_LIMITED errors use Retry-After when available, then exponential
+        back-off.  Other transient errors use the standard base_wait schedule.
         """
         msg = str(exc)
-        if "429" in msg or "rate limit" in msg.lower():
+        if "RATE_LIMITED" in msg or "rate limit" in msg.lower():
             m = re.search(r"Retry-After:\s*(\d+)", msg)
             if m:
                 return float(m.group(1)) + 2
-            # Exponential: 30 s, 60 s, 120 s … capped at 5 min
+            # Exponential: 60 s, 120 s, 240 s … capped at 5 min
             return min(config.gdelt_retry_rate_limit_wait * (2 ** attempt), 300.0)
         return config.gdelt_retry_base_wait * (2 ** attempt)
 
@@ -235,9 +248,25 @@ class GDELTClient:
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             if status == 429:
+                # Parse the machine-readable code from the response body.
+                # RATE_LIMITED  → per-minute limit; Retry-After header present
+                # QUOTA_EXCEEDED → monthly quota exhausted; no Retry-After
+                error_code = ""
+                try:
+                    error_code = exc.response.json().get("code", "")
+                except Exception:
+                    pass
+
                 retry_after = exc.response.headers.get("Retry-After", "")
+
+                if error_code == "QUOTA_EXCEEDED":
+                    msg = "GDELT API monthly quota exceeded (429 QUOTA_EXCEEDED)"
+                    logger.error(msg)
+                    raise GDELTQuotaExceededError(msg) from exc
+
                 hint = f" — Retry-After: {retry_after}s" if retry_after else ""
-                msg = f"GDELT API rate limit (429){hint}"
+                code_tag = f" [{error_code}]" if error_code else ""
+                msg = f"GDELT API rate limit (429{code_tag}){hint}"
             else:
                 msg = f"GDELT API HTTP error {status}: {exc.response.text[:200]}"
             logger.error(msg)

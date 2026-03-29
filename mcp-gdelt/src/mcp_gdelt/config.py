@@ -58,7 +58,7 @@ class Config:
         default_factory=lambda: float(os.getenv("GDELT_RETRY_BASE_WAIT", "6.0"))
     )
     gdelt_retry_rate_limit_wait: float = field(
-        default_factory=lambda: float(os.getenv("GDELT_RETRY_RATE_LIMIT_WAIT", "30.0"))
+        default_factory=lambda: float(os.getenv("GDELT_RETRY_RATE_LIMIT_WAIT", "60.0"))
     )
     gdelt_cache_ttl: float = field(
         default_factory=lambda: float(os.getenv("GDELT_CACHE_TTL", "300.0"))
