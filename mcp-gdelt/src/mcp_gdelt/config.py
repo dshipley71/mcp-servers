@@ -31,6 +31,9 @@ class Config:
             "GDELT_API_BASE_URL", "https://api.gdeltproject.org/api/v2/doc/doc"
         )
     )
+    gdelt_cloud_base_url: str = field(
+        default_factory=lambda: os.getenv("GDELT_CLOUD_BASE_URL", "https://gdeltcloud.com")
+    )
     gdelt_default_max_records: int = field(
         default_factory=lambda: int(os.getenv("GDELT_DEFAULT_MAX_RECORDS", "50"))
     )
@@ -58,7 +61,7 @@ class Config:
         default_factory=lambda: float(os.getenv("GDELT_RETRY_BASE_WAIT", "6.0"))
     )
     gdelt_retry_rate_limit_wait: float = field(
-        default_factory=lambda: float(os.getenv("GDELT_RETRY_RATE_LIMIT_WAIT", "30.0"))
+        default_factory=lambda: float(os.getenv("GDELT_RETRY_RATE_LIMIT_WAIT", "60.0"))
     )
     gdelt_cache_ttl: float = field(
         default_factory=lambda: float(os.getenv("GDELT_CACHE_TTL", "300.0"))
