@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import random
 import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 import httpx
@@ -70,8 +72,22 @@ class GDELTClient:
     def __init__(self) -> None:
         self._base_url       = config.gdelt_api_base_url
         self._cloud_base_url = config.gdelt_cloud_base_url
+        # Granular timeouts (py-gdelt pattern): only the read phase is slow
+        # for GDELT; connect/write/pool are kept tight to surface hangs fast.
         self._client = httpx.AsyncClient(
-            timeout=config.gdelt_api_timeout,
+            timeout=httpx.Timeout(
+                connect=config.gdelt_connect_timeout,
+                read=config.gdelt_read_timeout,
+                write=config.gdelt_write_timeout,
+                pool=config.gdelt_pool_timeout,
+            ),
+            # Connection pool limits (py-gdelt pattern): cap keep-alive
+            # connections so idle sockets don't pile up, while allowing a
+            # generous burst ceiling for concurrent tool calls.
+            limits=httpx.Limits(
+                max_keepalive_connections=config.gdelt_max_keepalive_connections,
+                max_connections=config.gdelt_max_connections,
+            ),
             headers={"User-Agent": config.gdelt_user_agent},
             follow_redirects=True,
         )
@@ -80,11 +96,15 @@ class GDELTClient:
         logger.debug(
             "GDELTClient initialised",
             {
-                "doc_url":    self._base_url,
-                "cloud_url":  self._cloud_base_url,
-                "timeout":    config.gdelt_api_timeout,
-                "cache_ttl":  config.gdelt_cache_ttl,
-                "rate_limit": config.gdelt_rate_limit_interval,
+                "doc_url":        self._base_url,
+                "cloud_url":      self._cloud_base_url,
+                "read_timeout":   config.gdelt_read_timeout,
+                "connect_timeout":config.gdelt_connect_timeout,
+                "cache_ttl":      config.gdelt_cache_ttl,
+                "hist_cache_ttl": config.gdelt_historical_cache_ttl,
+                "rate_limit":     config.gdelt_rate_limit_interval,
+                "max_keepalive":  config.gdelt_max_keepalive_connections,
+                "max_connections":config.gdelt_max_connections,
             },
         )
 
@@ -227,14 +247,22 @@ class GDELTClient:
 
         RATE_LIMITED  → honour Retry-After then exponential (60, 120, 240 s).
         Other errors  → standard base_wait exponential (6, 12, 24 s).
+
+        Jitter (py-gdelt pattern): a random fraction of the computed wait is
+        added so that multiple concurrent clients don't all retry at the same
+        instant (thundering-herd prevention).
         """
         msg = str(exc)
         if "RATE_LIMITED" in msg or "rate limit" in msg.lower():
             m = re.search(r"Retry-After:\s*(\d+)", msg)
             if m:
-                return float(m.group(1)) + 2
-            return min(config.gdelt_retry_rate_limit_wait * (2 ** attempt), 300.0)
-        return config.gdelt_retry_base_wait * (2 ** attempt)
+                base = float(m.group(1)) + 2
+            else:
+                base = min(config.gdelt_retry_rate_limit_wait * (2 ** attempt), 300.0)
+        else:
+            base = config.gdelt_retry_base_wait * (2 ** attempt)
+        # Add up to gdelt_retry_jitter * base seconds of random jitter
+        return base + random.uniform(0, config.gdelt_retry_jitter * base)
 
     # ------------------------------------------------------------------
     # Cache + rate-limit wrapper (shared by all endpoints)
@@ -264,7 +292,7 @@ class GDELTClient:
         self._last_request_time = loop.time()   # advance only on success
 
         if config.gdelt_cache_ttl > 0:
-            self._cache_set(key, result)  # type: ignore[possibly-undefined]
+            self._cache_set(key, result, request_params)  # type: ignore[possibly-undefined]
 
         return result
 
@@ -285,11 +313,52 @@ class GDELTClient:
             return None
         return entry.response
 
-    def _cache_set(self, key: str, response: Any) -> None:
+    def _cache_set(
+        self,
+        key: str,
+        response: Any,
+        request_params: dict[str, str] | None = None,
+    ) -> None:
+        """Store response with TTL.
+
+        Tiered TTL (py-gdelt pattern): if the request targets a fixed
+        historical window that ended more than gdelt_historical_threshold_days
+        ago, the data can never change — use the much longer
+        gdelt_historical_cache_ttl (default 24 h) instead of the standard TTL.
+        """
+        ttl = self._resolve_ttl(request_params)
         self._cache[key] = _CacheEntry(
             response=response,
-            expires_at=time.monotonic() + config.gdelt_cache_ttl,
+            expires_at=time.monotonic() + ttl,
         )
+        logger.debug("Cache set", {"key": key, "ttl": ttl})
+
+    def _resolve_ttl(self, request_params: dict[str, str] | None) -> float:
+        """Return the appropriate TTL for the given request.
+
+        Historical detection: both ``startdatetime`` and ``enddatetime`` must
+        be present and the end of the window must be older than
+        ``gdelt_historical_threshold_days``.  All other requests use the
+        standard ``gdelt_cache_ttl``.
+        """
+        hist_ttl = config.gdelt_historical_cache_ttl
+        if (
+            hist_ttl > 0
+            and request_params
+            and "startdatetime" in request_params
+            and "enddatetime"   in request_params
+        ):
+            try:
+                end_str = request_params["enddatetime"]  # YYYYMMDDHHMMSS
+                end_dt  = datetime.strptime(end_str, "%Y%m%d%H%M%S").replace(
+                    tzinfo=timezone.utc
+                )
+                age_days = (datetime.now(timezone.utc) - end_dt).days
+                if age_days >= config.gdelt_historical_threshold_days:
+                    return hist_ttl
+            except (ValueError, OverflowError):
+                pass
+        return config.gdelt_cache_ttl
 
     # ------------------------------------------------------------------
     # Auth helpers

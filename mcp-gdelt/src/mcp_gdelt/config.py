@@ -23,8 +23,27 @@ class Config:
     gdelt_api_key: str = field(
         default_factory=lambda: os.getenv("GDELT_API_KEY", "")
     )
-    gdelt_api_timeout: float = field(
-        default_factory=lambda: float(os.getenv("GDELT_API_TIMEOUT", "60"))
+    # ── Granular timeouts (py-gdelt pattern) ──────────────────────────────
+    # read_timeout replaces the old flat gdelt_api_timeout.
+    # connect/write/pool are short because only the actual data transfer is slow.
+    gdelt_connect_timeout: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_CONNECT_TIMEOUT", "10.0"))
+    )
+    gdelt_read_timeout: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_API_TIMEOUT", "60.0"))
+    )
+    gdelt_write_timeout: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_WRITE_TIMEOUT", "10.0"))
+    )
+    gdelt_pool_timeout: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_POOL_TIMEOUT", "5.0"))
+    )
+    # ── Connection pool limits (py-gdelt pattern) ─────────────────────────
+    gdelt_max_keepalive_connections: int = field(
+        default_factory=lambda: int(os.getenv("GDELT_MAX_KEEPALIVE_CONNECTIONS", "20"))
+    )
+    gdelt_max_connections: int = field(
+        default_factory=lambda: int(os.getenv("GDELT_MAX_CONNECTIONS", "100"))
     )
     gdelt_api_base_url: str = field(
         default_factory=lambda: os.getenv(
@@ -65,6 +84,23 @@ class Config:
     )
     gdelt_cache_ttl: float = field(
         default_factory=lambda: float(os.getenv("GDELT_CACHE_TTL", "300.0"))
+    )
+    # ── Tiered TTL: historical queries (fixed past window) are cached much
+    # longer because the underlying data never changes.  A query is treated
+    # as historical when BOTH startdatetime and enddatetime are present and
+    # the window ended more than gdelt_historical_threshold_days ago.
+    # Set gdelt_historical_cache_ttl=0 to use the standard TTL for everything.
+    gdelt_historical_cache_ttl: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_HISTORICAL_CACHE_TTL", "86400.0"))  # 24 h
+    )
+    gdelt_historical_threshold_days: int = field(
+        default_factory=lambda: int(os.getenv("GDELT_HISTORICAL_THRESHOLD_DAYS", "30"))
+    )
+    # ── Retry jitter ──────────────────────────────────────────────────────
+    # Adds a random fraction of the base wait to spread concurrent clients.
+    # 0.25 means up to +25 % of the computed wait is added at random.
+    gdelt_retry_jitter: float = field(
+        default_factory=lambda: float(os.getenv("GDELT_RETRY_JITTER", "0.25"))
     )
     log_level: LogLevel = field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "info")  # type: ignore[return-value]
