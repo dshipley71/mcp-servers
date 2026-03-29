@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import random
-import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -43,6 +42,10 @@ class GDELTAuthError(RuntimeError):
 
 class GDELTAccessDeniedError(RuntimeError):
     """Plan does not include API access (403 API_ACCESS_DENIED)."""
+
+
+class GDELTRateLimitError(RuntimeError):
+    """Transient rate limit (429 RATE_LIMITED). Not retried — caller should back off."""
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +231,7 @@ class GDELTClient:
         for attempt in range(config.gdelt_max_retries):
             try:
                 return await fn()
-            except (GDELTQuotaExceededError, GDELTAuthError, GDELTAccessDeniedError):
+            except (GDELTQuotaExceededError, GDELTAuthError, GDELTAccessDeniedError, GDELTRateLimitError):
                 raise   # not retryable
             except RuntimeError as exc:
                 last_exc = exc
@@ -245,22 +248,15 @@ class GDELTClient:
     def _retry_wait(self, exc: RuntimeError, attempt: int) -> float:
         """Seconds to wait before the next attempt.
 
-        RATE_LIMITED  → honour Retry-After then exponential (60, 120, 240 s).
-        Other errors  → standard base_wait exponential (6, 12, 24 s).
+        Standard exponential back-off: base_wait * 2^attempt (6, 12, 24 s …).
+        429 rate-limit errors are non-retryable (GDELTRateLimitError) so they
+        never reach this method.
 
         Jitter (py-gdelt pattern): a random fraction of the computed wait is
         added so that multiple concurrent clients don't all retry at the same
         instant (thundering-herd prevention).
         """
-        msg = str(exc)
-        if "RATE_LIMITED" in msg or "rate limit" in msg.lower():
-            m = re.search(r"Retry-After:\s*(\d+)", msg)
-            if m:
-                base = float(m.group(1)) + 2
-            else:
-                base = min(config.gdelt_retry_rate_limit_wait * (2 ** attempt), 300.0)
-        else:
-            base = config.gdelt_retry_base_wait * (2 ** attempt)
+        base = config.gdelt_retry_base_wait * (2 ** attempt)
         # Add up to gdelt_retry_jitter * base seconds of random jitter
         return base + random.uniform(0, config.gdelt_retry_jitter * base)
 
@@ -388,11 +384,11 @@ class GDELTClient:
                 msg = "GDELT API monthly quota exceeded (429 QUOTA_EXCEEDED)"
                 logger.error(msg)
                 raise GDELTQuotaExceededError(msg) from exc
-            hint     = f" — Retry-After: {retry_after}s" if retry_after else ""
+            hint     = f" — wait {retry_after}s before retrying" if retry_after else ""
             code_tag = f" [{error_code}]" if error_code else ""
             msg = f"GDELT API rate limit (429{code_tag}){hint}"
             logger.error(msg)
-            raise RuntimeError(msg) from exc
+            raise GDELTRateLimitError(msg) from exc
 
         if status == 401:
             msg = f"GDELT API authentication failed (401 {error_code or 'UNAUTHORIZED'})"

@@ -6,6 +6,7 @@ from .services.gdelt_client import (
     GDELTAccessDeniedError,
     GDELTAuthError,
     GDELTQuotaExceededError,
+    GDELTRateLimitError,
 )
 
-__all__ = ["GDELTAccessDeniedError", "GDELTAuthError", "GDELTQuotaExceededError"]
+__all__ = ["GDELTAccessDeniedError", "GDELTAuthError", "GDELTQuotaExceededError", "GDELTRateLimitError"]
