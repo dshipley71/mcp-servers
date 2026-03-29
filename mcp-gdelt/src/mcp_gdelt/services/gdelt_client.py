@@ -437,7 +437,7 @@ class GDELTClient:
             self._handle_http_error(exc)
 
         except httpx.RequestError as exc:
-            msg = f"GDELT API request failed: {exc}"
+            msg = f"GDELT API request failed ({type(exc).__name__}): {exc}"
             logger.error(msg)
             raise RuntimeError(msg) from exc
 
@@ -473,7 +473,7 @@ class GDELTClient:
             self._handle_http_error(exc)
 
         except httpx.RequestError as exc:
-            msg = f"GDELT Cloud request failed: {exc}"
+            msg = f"GDELT Cloud request failed ({type(exc).__name__}): {exc}"
             logger.error(msg)
             raise RuntimeError(msg) from exc
 

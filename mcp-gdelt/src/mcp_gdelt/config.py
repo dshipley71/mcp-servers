@@ -27,7 +27,7 @@ class Config:
     # read_timeout replaces the old flat gdelt_api_timeout.
     # connect/write/pool are short because only the actual data transfer is slow.
     gdelt_connect_timeout: float = field(
-        default_factory=lambda: float(os.getenv("GDELT_CONNECT_TIMEOUT", "10.0"))
+        default_factory=lambda: float(os.getenv("GDELT_CONNECT_TIMEOUT", "30.0"))
     )
     gdelt_read_timeout: float = field(
         default_factory=lambda: float(os.getenv("GDELT_API_TIMEOUT", "60.0"))
