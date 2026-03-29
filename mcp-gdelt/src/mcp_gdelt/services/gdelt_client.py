@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
+import time
+from dataclasses import dataclass
 
 import httpx
 
@@ -17,8 +21,14 @@ from ..types import (
 )
 
 
+@dataclass
+class _CacheEntry:
+    response: GDELTAPIResponse
+    expires_at: float   # monotonic seconds
+
+
 class GDELTClient:
-    """Async wrapper around the GDELT DOC 2.0 API with rate limiting and retry."""
+    """Async wrapper around the GDELT DOC 2.0 API with rate limiting, retry, and caching."""
 
     def __init__(self) -> None:
         self._base_url = config.gdelt_api_base_url
@@ -28,9 +38,15 @@ class GDELTClient:
             follow_redirects=True,   # GDELT redirects; httpx default is False
         )
         self._last_request_time: float = 0.0
+        self._cache: dict[str, _CacheEntry] = {}
         logger.debug(
             "GDELTClient initialised",
-            {"base_url": self._base_url, "timeout": config.gdelt_api_timeout},
+            {
+                "base_url": self._base_url,
+                "timeout": config.gdelt_api_timeout,
+                "cache_ttl": config.gdelt_cache_ttl,
+                "rate_limit_interval": config.gdelt_rate_limit_interval,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -75,6 +91,19 @@ class GDELTClient:
         logger.info(f"Found {len(result.images or [])} images for: {inp.query}")
         return result
 
+    def cache_clear(self) -> int:
+        """Evict all cached entries and return the count removed."""
+        n = len(self._cache)
+        self._cache.clear()
+        logger.debug(f"Cache cleared ({n} entries removed)")
+        return n
+
+    def cache_stats(self) -> dict[str, int]:
+        """Return counts of live vs expired cache entries."""
+        now = time.monotonic()
+        live = sum(1 for e in self._cache.values() if e.expires_at > now)
+        return {"live": live, "expired": len(self._cache) - live, "total": len(self._cache)}
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -84,7 +113,7 @@ class GDELTClient:
         last_exc: RuntimeError | None = None
         for attempt in range(config.gdelt_max_retries):
             try:
-                return await self._rate_limited_execute(params)
+                return await self._cached_execute(params)
             except RuntimeError as exc:
                 last_exc = exc
                 if attempt >= config.gdelt_max_retries - 1:
@@ -98,27 +127,83 @@ class GDELTClient:
         raise last_exc  # type: ignore[misc]
 
     def _retry_wait(self, exc: RuntimeError, attempt: int) -> float:
-        """Return seconds to wait before the next attempt."""
+        """Return seconds to wait before the next attempt.
+
+        429 / rate-limit errors use their own exponential schedule so that
+        repeated quota exhaustion doesn't keep hitting GDELT at the same
+        (too-short) interval.  Other errors use the standard base_wait.
+        """
         msg = str(exc)
         if "429" in msg or "rate limit" in msg.lower():
             m = re.search(r"Retry-After:\s*(\d+)", msg)
-            return float(m.group(1)) + 2 if m else config.gdelt_retry_rate_limit_wait
+            if m:
+                return float(m.group(1)) + 2
+            # Exponential: 30 s, 60 s, 120 s … capped at 5 min
+            return min(config.gdelt_retry_rate_limit_wait * (2 ** attempt), 300.0)
         return config.gdelt_retry_base_wait * (2 ** attempt)
 
-    async def _rate_limited_execute(self, params: GDELTQueryParams) -> GDELTAPIResponse:
+    # ------------------------------------------------------------------
+    # Cache helpers
+    # ------------------------------------------------------------------
+
+    def _cache_key(self, request_params: dict[str, str]) -> str:
+        serialised = json.dumps(request_params, sort_keys=True)
+        return hashlib.md5(serialised.encode()).hexdigest()
+
+    def _cache_get(self, key: str) -> GDELTAPIResponse | None:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if time.monotonic() >= entry.expires_at:
+            del self._cache[key]
+            return None
+        return entry.response
+
+    def _cache_set(self, key: str, response: GDELTAPIResponse) -> None:
+        self._cache[key] = _CacheEntry(
+            response=response,
+            expires_at=time.monotonic() + config.gdelt_cache_ttl,
+        )
+
+    # ------------------------------------------------------------------
+    # Rate-limited + cached execution
+    # ------------------------------------------------------------------
+
+    async def _cached_execute(self, params: GDELTQueryParams) -> GDELTAPIResponse:
+        """Return a cached result when available, otherwise hit the API."""
+        request_params = params.to_request_params()
+        if config.gdelt_api_key:
+            request_params["key"] = config.gdelt_api_key
+
+        if config.gdelt_cache_ttl > 0:
+            key = self._cache_key(request_params)
+            cached = self._cache_get(key)
+            if cached is not None:
+                logger.debug("Cache hit", {"key": key})
+                return cached
+
+        result = await self._rate_limited_execute(params, request_params)
+
+        if config.gdelt_cache_ttl > 0:
+            self._cache_set(key, result)  # type: ignore[possibly-undefined]
+
+        return result
+
+    async def _rate_limited_execute(
+        self, params: GDELTQueryParams, request_params: dict[str, str]
+    ) -> GDELTAPIResponse:
         """Enforce the per-request rate limit, then execute the query."""
         loop = asyncio.get_event_loop()
         elapsed = loop.time() - self._last_request_time
         if elapsed < config.gdelt_rate_limit_interval:
             await asyncio.sleep(config.gdelt_rate_limit_interval - elapsed)
-        result = await self._execute_query(params)
+        result = await self._execute_query(params, request_params)
         self._last_request_time = loop.time()  # advance only after a completed call
         return result
 
-    async def _execute_query(self, params: GDELTQueryParams) -> GDELTAPIResponse:
-        request_params = params.to_request_params()
-        if config.gdelt_api_key:
-            request_params["key"] = config.gdelt_api_key
+    async def _execute_query(
+        self, params: GDELTQueryParams, request_params: dict[str, str]
+    ) -> GDELTAPIResponse:
         logger.debug("GDELT API request", {"url": self._base_url, "params": request_params})
 
         try:
