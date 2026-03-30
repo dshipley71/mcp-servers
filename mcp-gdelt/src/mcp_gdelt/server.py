@@ -46,6 +46,7 @@ async def search_articles(
     sort: str | None = None,
     start_date_time: str | None = None,
     end_date_time: str | None = None,
+    deduplicate: bool = True,
 ) -> str:
     """Search GDELT news articles.
 
@@ -56,6 +57,7 @@ async def search_articles(
         sort: Sort order — DateDesc | DateAsc | ToneAsc | ToneDesc | HybridRel.
         start_date_time: Start date in YYYYMMDDHHMMSS format.
         end_date_time: End date in YYYYMMDDHHMMSS format.
+        deduplicate: Remove duplicate URLs from results (default True).
     """
     try:
         logger.info(f"Tool: search_articles — query: {query}")
@@ -67,6 +69,7 @@ async def search_articles(
             sort=sort,  # type: ignore[arg-type]
             start_date_time=start_date_time,
             end_date_time=end_date_time,
+            deduplicate=deduplicate,
         )
 
         result = await gdelt_client.search_articles(inp)
