@@ -294,14 +294,29 @@ class GDELTClient:
 
         Non-retryable errors (quota exhaustion, auth failures, access denied)
         are re-raised immediately.
+
+        Transient rate-limit errors (429) are retried with backoff; the
+        Retry-After header value is used when present, otherwise standard
+        exponential backoff applies.
         """
         last_exc: RuntimeError | None = None
         for attempt in range(config.gdelt_max_retries):
             try:
                 return await fn()
             except (GDELTQuotaExceededError, GDELTAuthError, GDELTAccessDeniedError,
-                    GDELTRateLimitError, GDELTClientError):
+                    GDELTClientError):
                 raise   # not retryable — problem is with the request, not the server
+            except GDELTRateLimitError as exc:
+                last_exc = exc
+                if attempt >= config.gdelt_max_retries - 1:
+                    break
+                # Honour the server's Retry-After hint; fall back to exponential backoff.
+                wait = float(exc.retry_after) if exc.retry_after is not None else self._retry_wait(exc, attempt)
+                logger.warn(
+                    f"Attempt {attempt + 1}/{config.gdelt_max_retries} rate-limited (429), "
+                    f"retrying in {wait:.0f}s"
+                )
+                await asyncio.sleep(wait)
             except RuntimeError as exc:
                 last_exc = exc
                 if attempt >= config.gdelt_max_retries - 1:
