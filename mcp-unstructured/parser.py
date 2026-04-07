@@ -7,11 +7,8 @@ from pdfminer.high_level import extract_text as pdfminer_extract_text
 from unstructured.partition.auto import partition
 from unstructured.chunking.basic import chunk_elements
 from unstructured.chunking.title import chunk_by_title
-from unstructured.cleaners.core import (
-    clean,
-    group_broken_paragraphs,
-    replace_unicode_quotes,
-)
+from unstructured.cleaners.core import clean, group_broken_paragraphs, replace_unicode_quotes
+
 
 FAST_PATH_EXTENSIONS = {
     ".txt", ".md", ".html", ".htm", ".xml", ".json", ".csv", ".eml",
