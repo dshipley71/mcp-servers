@@ -1,9 +1,11 @@
-# MCP Unstructured v6.1
+# MCP Unstructured v7
+
+This version removes `unstructured-inference` from the MCP server package.
 
 Includes:
-- corrected Colab notebook metadata
-- fallback partition strategies
-- safe chunk fallback
+- local Unstructured parsing only
+- no `hi_res` / inference dependency in requirements
+- fallback partition strategies limited to `ocr_only`, `fast`, and `auto`
 - health endpoint
 - numpy pin fix
 

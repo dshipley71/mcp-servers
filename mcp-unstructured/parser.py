@@ -1,7 +1,6 @@
 import os
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict
 
 from pdfminer.high_level import extract_text as pdfminer_extract_text
 
@@ -14,23 +13,14 @@ from unstructured.cleaners.core import (
     replace_unicode_quotes,
 )
 
-SLOW_PATH_EXTENSIONS = {
-    ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp", ".heic"
-}
-
 FAST_PATH_EXTENSIONS = {
     ".txt", ".md", ".html", ".htm", ".xml", ".json", ".csv", ".eml",
-    ".docx", ".pptx", ".xlsx", ".odt", ".rtf", ".tsv"
+    ".docx", ".pptx", ".xlsx", ".odt", ".rtf", ".tsv", ".pdf"
 }
 
 
 def get_allowed_root() -> Path:
     return Path(os.getenv("ALLOWED_ROOT", ".")).expanduser().resolve()
-
-
-def get_scanned_pdf_policy() -> str:
-    value = os.getenv("SCANNED_PDF_POLICY", "ocr_only").strip().lower()
-    return value if value in {"ocr_only", "slow"} else "ocr_only"
 
 
 def validate_path(path: str) -> Path:
@@ -56,17 +46,15 @@ def detect_pdf_text_layer(path: Path) -> bool:
 def infer_route(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        return "fast" if detect_pdf_text_layer(path) else get_scanned_pdf_policy()
+        return "fast" if detect_pdf_text_layer(path) else "ocr_only"
     if suffix in FAST_PATH_EXTENSIONS:
         return "fast"
-    return "slow"
+    return "auto"
 
 
 def resolve_strategy(route: str) -> str:
     if route == "fast":
         return "fast"
-    if route == "slow":
-        return "hi_res"
     if route == "ocr_only":
         return "ocr_only"
     return "auto"
@@ -89,9 +77,8 @@ def chunk_safe(elements, strategy: str):
 
 
 def safe_partition(path: Path, route: str):
-    # Deduplicate while preserving order
     strategies = []
-    for candidate in [route, "ocr_only", "fast"]:
+    for candidate in [route, "ocr_only", "fast", "auto"]:
         if candidate not in strategies:
             strategies.append(candidate)
 
@@ -105,7 +92,7 @@ def safe_partition(path: Path, route: str):
     raise RuntimeError(f"Partition failed after fallback: {type(last_err).__name__}: {last_err}")
 
 
-def parse_file(path: str, route: str = "auto", chunking_strategy: str = "basic"):
+def parse_file(path: str, route: str = "auto", chunking_strategy: str = "basic") -> Dict:
     p = validate_path(path)
     effective_route = infer_route(p) if route == "auto" else route
 
@@ -130,7 +117,8 @@ def parse_file(path: str, route: str = "auto", chunking_strategy: str = "basic")
         "metadata": {
             "route_requested": route,
             "route_used": used_route,
-            "num_chunks": len(out)
+            "num_chunks": len(out),
+            "inference_enabled": False
         }
     }
 
@@ -139,5 +127,6 @@ def health():
     import numpy
     return {
         "status": "ok",
-        "numpy_version": numpy.__version__
+        "numpy_version": numpy.__version__,
+        "inference_enabled": False
     }
