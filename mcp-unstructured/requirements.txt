@@ -1,5 +1,4 @@
-# Python dependencies only. Install system packages separately:
-#   apt-get install -y poppler-utils tesseract-ocr libmagic-dev
+numpy==1.26.4
 unstructured[all-docs]
 unstructured-inference
 pdfminer.six
