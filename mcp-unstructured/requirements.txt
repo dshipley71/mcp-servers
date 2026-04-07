@@ -1,2 +1,2 @@
-unstructured
+unstructured[all-docs]
 requests
