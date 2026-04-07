@@ -1,4 +1,9 @@
-unstructured[all-docs]
+numpy==1.26.4
+unstructured
 pdfminer.six
 requests
-numpy==1.26.4
+python-magic
+pypdf
+python-docx
+python-pptx
+openpyxl
