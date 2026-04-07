@@ -1,5 +1,5 @@
 numpy==1.26.4
 unstructured[all-docs]
-unstructured-inference
+#unstructured-inference
 pdfminer.six
 requests
