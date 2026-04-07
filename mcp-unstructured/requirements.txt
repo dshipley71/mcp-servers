@@ -1,5 +1,5 @@
 numpy==1.26.4
-unstructured
+unstructured[pdf]
 pdfminer.six
 requests
 python-magic
