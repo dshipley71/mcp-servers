@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-unstructured"
+version = "7.4.1"
+description = "Minimal-preservation reorganization of the MCP Unstructured v7.4 server"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy==1.26.4",
+    "unstructured[pdf,docx,pptx,xlsx]",
+    "pdfminer.six",
+    "requests",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

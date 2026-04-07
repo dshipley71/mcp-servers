@@ -1,0 +1,16 @@
+[project]
+name = "mcp_unstructured"
+version = "7.4.1"
+description = "Minimal-preservation reorganization of the MCP Unstructured v7.4 server"
+requires-python = ">=3.10"
+
+[server]
+module = "mcp_unstructured.server"
+callable = "run_http"
+default_port = 8000
+
+[transports]
+supported = ["http"]
+
+[environment]
+ALLOWED_ROOT = "/content"
