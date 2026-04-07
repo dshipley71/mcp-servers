@@ -2,10 +2,11 @@ import requests
 
 
 def test_parse_file(path: str):
-    r = requests.post("http://localhost:8000", json={
-        "tool": "parse_file",
-        "path": path
-    }, timeout=180)
+    r = requests.post(
+        "http://localhost:8000",
+        json={"tool": "parse_file", "path": path},
+        timeout=180,
+    )
     print(r.status_code)
     print(r.text[:1000])
 

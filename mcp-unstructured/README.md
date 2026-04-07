@@ -1,22 +1,29 @@
-# MCP Unstructured v7.1
+# MCP Unstructured v7.4
 
-This version removes `unstructured-inference` and also replaces `unstructured[all-docs]`
-with a leaner non-inference dependency set to reduce install time.
+This version restores PDF support while keeping the environment leaner than `unstructured[all-docs]`.
 
-Includes:
-- local Unstructured parsing only
-- no `hi_res` / inference dependency in requirements
-- no `all-docs` extra in requirements
-- fallback partition strategies limited to `ocr_only`, `fast`, and `auto`
-- health endpoint
-- numpy pin fix
+## What changed
+- keeps `unstructured-inference` out of the MCP server package
+- replaces base `unstructured` with targeted extras:
+  - `unstructured[pdf,docx,pptx,xlsx]`
+- keeps the non-inference MCP server flow
+- keeps notebook formatting fixed
+
+## Requirements
+```txt
+numpy==1.26.4
+unstructured[pdf,docx,pptx,xlsx]
+pdfminer.six
+requests
+```
 
 ## Colab notes
 1. Run the install cell.
 2. Restart the runtime.
 3. Run the remaining cells.
 
-## Why installs are faster
-`unstructured[all-docs]` pulls in a very large dependency tree, including
-`unstructured-inference`, Whisper, Google Vision, and many extra document/image packages.
-This version avoids that.
+## System packages
+```bash
+apt-get update -y
+apt-get install -y poppler-utils tesseract-ocr libmagic-dev
+```
