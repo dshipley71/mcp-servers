@@ -23,92 +23,117 @@ FAST_PATH_EXTENSIONS = {
     ".docx", ".pptx", ".xlsx", ".odt", ".rtf", ".tsv"
 }
 
+
 def get_allowed_root() -> Path:
     return Path(os.getenv("ALLOWED_ROOT", ".")).expanduser().resolve()
 
+
 def get_scanned_pdf_policy() -> str:
-    return os.getenv("SCANNED_PDF_POLICY", "ocr_only")
+    value = os.getenv("SCANNED_PDF_POLICY", "ocr_only").strip().lower()
+    return value if value in {"ocr_only", "slow"} else "ocr_only"
+
 
 def validate_path(path: str) -> Path:
     p = Path(path).expanduser().resolve()
     root = get_allowed_root()
-    if not p.exists(): raise ValueError("File not found")
-    if not p.is_file(): raise ValueError("Not a file")
+    if not p.exists():
+        raise ValueError(f"File not found: {path}")
+    if not p.is_file():
+        raise ValueError(f"Not a file: {path}")
     if root not in p.parents and p != root:
         raise ValueError("Access denied")
     return p
 
-def detect_pdf_text_layer(path: Path):
+
+def detect_pdf_text_layer(path: Path) -> bool:
     try:
         txt = pdfminer_extract_text(str(path), maxpages=2) or ""
-        return len(txt.strip()) > 20
-    except:
+        return len("".join(ch for ch in txt if not ch.isspace())) > 20
+    except Exception:
         return False
 
-def infer_route(path: Path):
-    if path.suffix.lower() == ".pdf":
+
+def infer_route(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
         return "fast" if detect_pdf_text_layer(path) else get_scanned_pdf_policy()
-    if path.suffix.lower() in FAST_PATH_EXTENSIONS:
+    if suffix in FAST_PATH_EXTENSIONS:
         return "fast"
     return "slow"
 
-def resolve_strategy(route):
-    if route == "fast": return "fast"
-    if route == "slow": return "hi_res"
-    if route == "ocr_only": return "ocr_only"
+
+def resolve_strategy(route: str) -> str:
+    if route == "fast":
+        return "fast"
+    if route == "slow":
+        return "hi_res"
+    if route == "ocr_only":
+        return "ocr_only"
     return "auto"
 
-def apply_clean(text):
+
+def apply_clean(text: str) -> str:
     text = clean(text)
     text = group_broken_paragraphs(text)
     text = replace_unicode_quotes(text)
     return text.strip()
 
-def chunk_safe(elements, strategy):
+
+def chunk_safe(elements, strategy: str):
     try:
         if strategy == "by_title":
             return chunk_by_title(elements)
         return chunk_elements(elements)
-    except:
+    except Exception:
         return chunk_elements(elements)
 
-def safe_partition(path, route):
-    strategies = [route, "ocr_only", "fast"]
+
+def safe_partition(path: Path, route: str):
+    # Deduplicate while preserving order
+    strategies = []
+    for candidate in [route, "ocr_only", "fast"]:
+        if candidate not in strategies:
+            strategies.append(candidate)
+
     last_err = None
     for r in strategies:
         try:
-            return partition(filename=str(path), strategy=resolve_strategy(r)), r
+            elements = partition(filename=str(path), strategy=resolve_strategy(r))
+            return elements, r
         except Exception as e:
             last_err = e
-    raise RuntimeError(f"Partition failed after fallback: {last_err}")
+    raise RuntimeError(f"Partition failed after fallback: {type(last_err).__name__}: {last_err}")
 
-def parse_file(path, route="auto", chunking_strategy="basic"):
+
+def parse_file(path: str, route: str = "auto", chunking_strategy: str = "basic"):
     p = validate_path(path)
-    route = infer_route(p) if route == "auto" else route
+    effective_route = infer_route(p) if route == "auto" else route
 
-    elements, used_route = safe_partition(p, route)
-
+    elements, used_route = safe_partition(p, effective_route)
     chunks = chunk_safe(elements, chunking_strategy)
-    out = []
 
+    out = []
+    total = len(chunks)
     for i, c in enumerate(chunks):
         out.append({
-            "text": apply_clean(getattr(c, "text", "")),
+            "text": apply_clean(getattr(c, "text", "") or ""),
             "source_path": str(p),
             "filename": p.name,
             "chunk_index": i,
-            "total_chunks": len(chunks),
+            "total_chunks": total,
             "page_number": getattr(getattr(c, "metadata", None), "page_number", None)
         })
 
     return {
-        "text": "\n\n".join([c["text"] for c in out]),
+        "text": "\n\n".join(c["text"] for c in out if c["text"]),
         "chunks": out,
         "metadata": {
+            "route_requested": route,
             "route_used": used_route,
             "num_chunks": len(out)
         }
     }
+
 
 def health():
     import numpy
