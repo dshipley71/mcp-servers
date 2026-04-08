@@ -1,4 +1,11 @@
 numpy==1.26.4
-unstructured[pdf,docx,pptx,xlsx]
+unstructured
 pdfminer.six
 requests
+python-docx
+python-pptx
+openpyxl
+pypdf
+pdf2image
+pytesseract
+unstructured-pytesseract

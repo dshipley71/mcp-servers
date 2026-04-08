@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
+import requests
 from pdfminer.high_level import extract_text as pdfminer_extract_text
 
 from unstructured.partition.auto import partition
@@ -89,8 +90,106 @@ def safe_partition(path: Path, route: str):
     raise RuntimeError(f"Partition failed after fallback: {type(last_err).__name__}: {last_err}")
 
 
-def parse_file(path: str, route: str = "auto", chunking_strategy: str = "basic") -> Dict:
+def _normalize_api_elements(elements: List[dict], path: Path) -> Dict:
+    out = []
+    total = len(elements)
+    for i, el in enumerate(elements):
+        metadata = el.get("metadata", {}) or {}
+        text = apply_clean(el.get("text", "") or "")
+        out.append({
+            "text": text,
+            "source_path": str(path),
+            "filename": path.name,
+            "chunk_index": i,
+            "total_chunks": total,
+            "page_number": metadata.get("page_number"),
+            "element_type": el.get("type"),
+        })
+
+    return {
+        "text": "\n\n".join(c["text"] for c in out if c["text"]),
+        "chunks": out,
+    }
+
+
+def _parse_file_vlm(
+    path: Path,
+    route: str,
+    chunking_strategy: str,
+    vlm_model_provider: str | None = None,
+    vlm_model: str | None = None,
+) -> Dict:
+    api_url = os.getenv("UNSTRUCTURED_API_URL")
+    api_key = os.getenv("UNSTRUCTURED_API_KEY")
+
+    if not api_url or not api_key:
+        raise ValueError(
+            "VLM mode requires UNSTRUCTURED_API_URL and UNSTRUCTURED_API_KEY to be set."
+        )
+
+    provider = vlm_model_provider or os.getenv("UNSTRUCTURED_VLM_PROVIDER", "openai")
+    model = vlm_model or os.getenv("UNSTRUCTURED_VLM_MODEL", "gpt-4o")
+
+    with open(path, "rb") as f:
+        files = {"files": (path.name, f, "application/octet-stream")}
+        data = {
+            "strategy": "vlm",
+            "vlm_model_provider": provider,
+            "vlm_model": model,
+        }
+        if chunking_strategy and chunking_strategy != "basic":
+            data["chunking_strategy"] = chunking_strategy
+
+        response = requests.post(
+            api_url,
+            headers={"unstructured-api-key": api_key},
+            files=files,
+            data=data,
+            timeout=600,
+        )
+
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"VLM partition request failed: HTTP {response.status_code}: {response.text[:1000]}"
+        )
+
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise RuntimeError("Unexpected VLM response format: expected a JSON list of elements.")
+
+    normalized = _normalize_api_elements(payload, path)
+    normalized["metadata"] = {
+        "route_requested": route,
+        "route_used": "vlm",
+        "num_chunks": len(normalized["chunks"]),
+        "inference_enabled": False,
+        "vlm_mode": True,
+        "vlm_model_provider": provider,
+        "vlm_model": model,
+        "vlm_transport": "unstructured_api",
+    }
+    return normalized
+
+
+def parse_file(
+    path: str,
+    route: str = "auto",
+    chunking_strategy: str = "basic",
+    vlm_mode: bool = False,
+    vlm_model_provider: str | None = None,
+    vlm_model: str | None = None,
+) -> Dict:
     p = validate_path(path)
+
+    if vlm_mode:
+        return _parse_file_vlm(
+            path=p,
+            route=route,
+            chunking_strategy=chunking_strategy,
+            vlm_model_provider=vlm_model_provider,
+            vlm_model=vlm_model,
+        )
+
     effective_route = infer_route(p) if route == "auto" else route
 
     elements, used_route = safe_partition(p, effective_route)
@@ -115,7 +214,8 @@ def parse_file(path: str, route: str = "auto", chunking_strategy: str = "basic")
             "route_requested": route,
             "route_used": used_route,
             "num_chunks": len(out),
-            "inference_enabled": False
+            "inference_enabled": False,
+            "vlm_mode": False
         }
     }
 
@@ -125,5 +225,10 @@ def health():
     return {
         "status": "ok",
         "numpy_version": numpy.__version__,
-        "inference_enabled": False
+        "inference_enabled": False,
+        "vlm_available_via_api": bool(
+            os.getenv("UNSTRUCTURED_API_URL") and os.getenv("UNSTRUCTURED_API_KEY")
+        ),
+        "default_vlm_provider": os.getenv("UNSTRUCTURED_VLM_PROVIDER", "openai"),
+        "default_vlm_model": os.getenv("UNSTRUCTURED_VLM_MODEL", "gpt-4o"),
     }

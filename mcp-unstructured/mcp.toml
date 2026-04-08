@@ -1,16 +1,21 @@
-[project]
-name = "mcp_unstructured"
-version = "7.4.1"
-description = "Minimal-preservation reorganization of the MCP Unstructured v7.4 server"
-requires-python = ">=3.10"
-
 [server]
-module = "mcp_unstructured.server"
-callable = "run_http"
-default_port = 8000
+name = "mcp_unstructured"
+transport = "http"
+host = "0.0.0.0"
+port = 8000
 
-[transports]
-supported = ["http"]
+[tools.parse_file]
+enabled = true
 
-[environment]
-ALLOWED_ROOT = "/content"
+[tools.health]
+enabled = true
+
+[tools.tools]
+enabled = true
+
+[vlm]
+enabled = false
+provider_env = "UNSTRUCTURED_VLM_PROVIDER"
+model_env = "UNSTRUCTURED_VLM_MODEL"
+api_url_env = "UNSTRUCTURED_API_URL"
+api_key_env = "UNSTRUCTURED_API_KEY"

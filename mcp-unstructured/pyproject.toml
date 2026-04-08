@@ -4,15 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-unstructured"
-version = "7.4.1"
-description = "Minimal-preservation reorganization of the MCP Unstructured v7.4 server"
+version = "0.7.5"
+description = "Lightweight MCP-style Unstructured document parser with optional hosted VLM mode"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy==1.26.4",
-    "unstructured[pdf,docx,pptx,xlsx]",
-    "pdfminer.six",
-    "requests",
+  "numpy==1.26.4",
+  "unstructured",
+  "pdfminer.six",
+  "requests",
+  "python-docx",
+  "python-pptx",
+  "openpyxl",
+  "pypdf",
+  "pdf2image",
+  "pytesseract",
+  "unstructured-pytesseract",
 ]
 
 [tool.setuptools]
